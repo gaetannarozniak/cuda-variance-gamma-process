@@ -3,6 +3,7 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
+
 /*
  * DEVICE FUNCTION: gammaRand
  * Generates one Gamma(shape=a, rate=b) random deviate on the GPU.
