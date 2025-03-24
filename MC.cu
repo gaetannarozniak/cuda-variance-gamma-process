@@ -8,13 +8,10 @@ the name of the author above.
 #include <stdio.h>
 #include <curand_kernel.h>
 
-__device__ float Y0d[6];
-__device__ float md[6];
-__device__ float alphad[8];
-__device__ float nu2d[6];
-__device__ float rhod[6];
-//__device__ float Strd[6];
-__device__ float Strd[16];
+__device__ float sigmad[10];
+__device__ float thetad[10];
+__device__ float kappad[10];
+__device__ float strd[4];
 
 
 // Function that catches the error 
