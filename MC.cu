@@ -100,69 +100,46 @@ int main(void) {
 	float sigma[10] = { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f, 0.19f, 0.2f };
 	float theta[10] = { -0.34f, -0.3f, -0.27f, -0.24f, -0.21f, -0.18f, -0.15f, -0.12f, -0.09f, -0.06f };
 	float kappa[10] = { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f, 0.19f, 0.2f };
-	float Str[4] = { 100.0f, 95.0f, 90.0f, 85.0f };
+	float str[4] = { 100.0f, 95.0f, 90.0f, 85.0f };
 
 	float Tmt[4] = { 3.0f / 12.0f, 6.0f / 12.0f, 1.0f, 2.0f };
 
 	cudaMemcpyToSymbol(sigmad, sigma, 10 * sizeof(float));
 	cudaMemcpyToSymbol(thetad, theta, 10 * sizeof(float));
 	cudaMemcpyToSymbol(kappad, kappa, 10 * sizeof(float));
-	cudaMemcpyToSymbol(Strd, Str, 4 * sizeof(float));
+	cudaMemcpyToSymbol(strd, str, 4 * sizeof(float));
 
 	int pidx, same;
 	int NTPB = 32;
 	int NB =  125;
 	int Ntraj = 40000; 
 	float dt = 1.0f / (64.0f * 24.0f);
-	float StrR, kappaR, sigmaR, error, price;
+	float strR, kappaR, sigmaR, thetaR, expected_payoff;
 
 	curandState* states;
 	cudaMalloc(&states, NB*NTPB*sizeof(curandState));
 	init_curand_state_k <<<NB, NTPB>>> (states);
 	float *sum;
-	int* num;
-	cudaMallocManaged(&sum, 2*NB*NTPB*sizeof(float));
-	cudaMallocManaged(&num, NB * NTPB * sizeof(int));
-
-	int numTraj;
+	cudaMallocManaged(&sum, NB*NTPB*sizeof(float));
 	FILE* fpt;
 
 	char strg[30];
 	for(int i=0; i<4; i++){
-		MC_k<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum, num);
+		MC_k<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum);
 		cudaDeviceSynchronize();
-		for(int j=0; j<16; j++){
-		//for (int j = 0; j < 6; j++) {
-			StrR = Str[j];
-			sprintf(strg, "Tmt%.4fStr%.4f.csv", Tmt[i], StrR);
-			fpt = fopen(strg, "w+");
-			fprintf(fpt, "alpha, beta, m, rho, Y0, price, 95cI, numTraj\n");
-			for(int k=0; k< 1296*8; k++){
-				same = k + j*(1296 * 8);
-				numTraj = num[same];
-				pidx = j;
-				price = sum[2*same];
-				error = 1.96f*sqrtf(sum[2*same+1] - (price * price)) / sqrtf((float)Ntraj);
-				same -= (pidx* 1296 * 8);
-				pidx = same/(216*8);
-				mR = m[pidx];
-				same -= (pidx*216*8);
-				pidx = same/(216);
-				alphaR = alpha[pidx];
-				same -= (pidx*216);
-				pidx = same/(36);
-				betaR = sqrtf(2.0f*alphaR*nu2[pidx])*(1.0f - expf(mR));//beta[pidx];
-				same -= (pidx*36);
-				pidx = same/(6);
-				rhoR = rho[pidx];
-				same -= (pidx*6);
-				pidx = same;
-				fprintf(fpt, "%f, %f, %f, %f, %f, %f, %f, %d\n", alphaR, betaR, mR, rhoR, Y0[same], price, error, numTraj);
-			}
-			fclose(fpt);
+		sprintf(strg, "Tmt%.4f.csv", Tmt[i]);
+		fpt = fopen(strg, "w+");
+		fprintf(fpt, "sigma, theta, kappa, Str, expected_payoff, Ntraj\n");
+		for(int k=0; k< 10 * 10 * 10 * 4; k++){
+			expected_payoff = sum[k] / Ntraj;
+			strR = str[k % 4];
+			kappaR = kappa[(k / 4) % 10];
+			thetaR = theta[(k / 40) % 10];
+			sigmaR = sigma[(k / 400) % 10];
+			fprintf(fpt, "%f, %f, %f, %f, %f, %f, %f, %d\n", sigmaR, thetaR, kappaR, strR, expected_payoff, Ntraj);
 		}
+		fclose(fpt);
 	}
-
 	cudaFree(states);
 	cudaFree(sum);
 	cudaFree(num);
