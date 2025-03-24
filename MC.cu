@@ -144,7 +144,7 @@ __global__ void MC_VG(
         float Y = __expf(wVG * T + X);
 
         // payoff of a call option:
-        float payoff = fmaxf(Y - K, 0.0f);
+        float payoff = fmaxf(Y - str, 0.0f);
 
         payoffSum  += payoff;
     }
@@ -170,7 +170,6 @@ int main(void) {
 	cudaMemcpyToSymbol(kappad, kappa, 10 * sizeof(float));
 	cudaMemcpyToSymbol(strd, str, 4 * sizeof(float));
 
-	int pidx, same;
 	int NTPB = 32;
 	int NB =  125;
 	int Ntraj = 40000; 
@@ -186,7 +185,7 @@ int main(void) {
 
 	char strg[30];
 	for(int i=0; i<4; i++){
-		MC_k<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum);
+		MC_VG<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum);
 		cudaDeviceSynchronize();
 		sprintf(strg, "Tmt%.4f.csv", Tmt[i]);
 		fpt = fopen(strg, "w+");
@@ -197,13 +196,11 @@ int main(void) {
 			kappaR = kappa[(k / 4) % 10];
 			thetaR = theta[(k / 40) % 10];
 			sigmaR = sigma[(k / 400) % 10];
-			fprintf(fpt, "%f, %f, %f, %f, %f, %f, %f, %d\n", sigmaR, thetaR, kappaR, strR, expected_payoff, Ntraj);
+			fprintf(fpt, "%f, %f, %f, %f, %f, %d\n", sigmaR, thetaR, kappaR, strR, expected_payoff, Ntraj);
 		}
 		fclose(fpt);
 	}
 	cudaFree(states);
 	cudaFree(sum);
-	cudaFree(num);
-
 	return 0;
 }

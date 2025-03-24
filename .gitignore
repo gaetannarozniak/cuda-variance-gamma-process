@@ -1,2 +1,4 @@
 *.o
 nested_vg.cu
+*.csv
+MC
