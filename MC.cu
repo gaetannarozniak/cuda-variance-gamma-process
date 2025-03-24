@@ -95,30 +95,29 @@ __device__ float gammaRand(float a, float b, curandState *state)
 }
 
 __global__ void MC_VG(
-    float kappa, 
-    float theta, 
-    float sigma,
-    float wVG,      // the drift correction
-    float T,        // final maturity
-    float K,        // strike
-    int   Nsteps,   // how many time steps for the VG discretization
-    int   Ntraj,    // how many paths per thread
+	float dt,
+    float T,       
+    int   Ntraj,
     curandState* state, 
-    float* sums     // accumulate payoff sums here
+    float* sums
 )
 {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     curandState localState = state[idx];
 
-    float dt  = T / (float)Nsteps;
-    // shape for Gamma is (dt / kappa)
-    // scale for Gamma is kappa
+	// unpack parameters
+	float str = strd[idx % 4];
+	float kappa = kappad[(idx / 4) % 10];
+	float theta = thetad[(idx / 40) % 10];
+	float sigma = sigmad[(idx / 400) % 10];
+
+	float wVG = __logf(1.0f - theta * kappa - kappa * sigma * sigma / 2.0f) / kappa;
+
     float shape = dt / kappa;
     float scale = kappa;
+	int Nsteps = (int)(T / dt);
 
     float payoffSum  = 0.0f;  // accumulate payoff
-    // optional: track sum of squares if you want confidence intervals
-    float payoffSum2 = 0.0f;
 
     // Main loop over # of paths assigned to this thread
     for(int i = 0; i < Ntraj; i++)
