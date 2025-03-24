@@ -1,10 +1,3 @@
-/**************************************************************
-Lokman A. Abbas-Turki code
-
-Those who re-use this code should mention in their code
-the name of the author above.
-***************************************************************/
-
 #include <stdio.h>
 #include <curand_kernel.h>
 
@@ -14,84 +7,12 @@ __device__ float kappad[10];
 __device__ float strd[4];
 
 
-// Function that catches the error 
-void testCUDA(cudaError_t error, const char* file, int line) {
-
-	if (error != cudaSuccess) {
-		printf("There is an error in file %s at line %d\n", file, line);
-		exit(EXIT_FAILURE);
-	}
-}
-
-// Has to be defined in the compilation in order to get the correct value of the 
-// macros __FILE__ and __LINE__
-#define testCUDA(error) (testCUDA(error, __FILE__ , __LINE__))
-
 // Set the state for each thread
 __global__ void init_curand_state_k(curandState* state)
 {
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
 	curand_init(0, idx, 0, &state[idx]);
 }
-
-// Monte Carlo simulation kernel
-// __global__ void MC_k(float dt, float T, int Ntraj, curandState* state, float* sum, int* num){
-
-// 	int pidx, same, numR;
-// 	float t, X, Y;
-// 	int idx = blockDim.x * blockIdx.x + threadIdx.x; 
-// 	curandState localState = state[idx];
-// 	float2 G;
-// 	float B;
-// 	float price;
-// 	float sumR = 0.0f;
-// 	float sum2R = 0.0f;
-// 	same = idx;
-
-// 	pidx = same/(1296 * 8);
-// 	float StrR = Strd[pidx];
-// 	same -= (pidx* 1296 * 8);
-// 	pidx = same/(216 * 8);
-// 	float mR = md[pidx];
-// 	same -= (pidx* 216 * 8);
-// 	pidx = same/(216);
-// 	float alphaR = alphad[pidx];
-// 	same -= (pidx*216);
-// 	pidx = same/(36);
-// 	float betaR = sqrtf(2.0f*alphaR*nu2d[pidx])*(1.0f - expf(mR));//betad[pidx];
-// 	same -= (pidx*36);
-// 	pidx = same/(6);
-// 	float rhoR = rhod[pidx];
-// 	same -= (pidx*6);
-// 	pidx = same;
-
-// 	numR = 0;
-// 	for (int i = 0; i < Ntraj; i++) {
-// 		t = 0.0f;
-// 		X = 1.0f;
-// 		Y = Y0d[pidx];
-// 		while(t<T){
-// 			G = curand_normal2(&localState);
-// 			X *= (1.0f + expf(Y)*G.x*dt);
-// 			B = rhoR*G.x + sqrtf(1.0f-rhoR*rhoR)*G.y;
-// 			Y = Y + alphaR*(mR-Y)*dt*dt + betaR*dt*B;
-// 			t += dt*dt;
-// 		}
-// 		if (X < 12.0f) {
-// 			price = fmaxf(0.0f, X - StrR) / Ntraj;
-// 			sumR += price;
-// 			sum2R += price * price * Ntraj;
-// 			numR++;
-// 		}
-// 	}
-// 	sum[2*idx] = sumR*((float)Ntraj/numR);
-// 	sum[2*idx + 1] = sum2R*((float)Ntraj / numR);
-// 	num[idx] = numR;
-
-
-// 	/* Copy state back to global memory */
-// 	state[idx] = localState;
-// }
 
 
 __device__ float gammaRand(float a, float b, curandState *state)
@@ -103,9 +24,6 @@ __device__ float gammaRand(float a, float b, curandState *state)
         return 0.0f;
     }
 
-    // -------------------------------------------------------------------------
-    // CASE 1:  0 < a < 1   (Johnk’s algorithm, from homework Algorithm 6.7)
-    // -------------------------------------------------------------------------
     if (a < 1.0f)
     {
         // We will produce Gamma(a, 1) and then scale by 1/b to get Gamma(a, b).
@@ -130,9 +48,6 @@ __device__ float gammaRand(float a, float b, curandState *state)
             }
         }
     }
-    // -------------------------------------------------------------------------
-    // CASE 2:  a >= 1   (Best’s algorithm, from homework Algorithm 6.8)
-    // -------------------------------------------------------------------------
     else
     {
         // Also known as the “Cheng–Best” or “BC” method
@@ -178,12 +93,7 @@ __device__ float gammaRand(float a, float b, curandState *state)
         }
     }
 }
-////////////////////////////////////////////////////////////////////////////////
-// Kernel: Variance-Gamma simulation for call-price payoff
-//   dt   = T / (number_of_steps)
-//   Ntraj = # paths per thread
-//   wVG  = log((1 - theta*kappa - 0.5*sigma^2*kappa)) / kappa
-////////////////////////////////////////////////////////////////////////////////
+
 __global__ void MC_VG(
     float kappa, 
     float theta, 
