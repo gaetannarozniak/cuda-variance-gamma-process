@@ -30,46 +30,6 @@ void testCUDA(cudaError_t error, const char* file, int line) {
 // macros __FILE__ and __LINE__
 #define testCUDA(error) (testCUDA(error, __FILE__ , __LINE__))
 
-void strikeInterval(float* K, float T) {
-
-		float fidx = T * 12.0f + 1.0f;
-		int i = 0;
-		float coef = 1.0f;
-		float delta;
-
-		while (i < fidx) {
-			coef *= (1.02f);
-			i++;
-		}
-
-		delta = pow(coef, 1.0f / 8.0f);
-		K[15] = coef;
-
-		for (i = 1; i < 16; i++) {
-			K[15 - i] = K[15 - i + 1] / delta;
-		}
-	}
-
-void strikeIntervalInfer(float* K, float T) {
-
-	float fidx = T * 12.0f + 1.0f;
-	int i = 0;
-	float coef = 1.0f;
-	float delta;
-
-	while (i < fidx) {
-		coef *= (1.02f);
-		i++;
-	}
-
-	delta = pow(coef, 1.0f / 3.0f);
-	K[5] = coef;
-
-	for (i = 1; i < 6; i++) {
-		K[5 - i] = K[5 - i + 1] / delta;
-	}
-}
-
 // Set the state for each thread
 __global__ void init_curand_state_k(curandState* state)
 {
@@ -137,34 +97,24 @@ __global__ void MC_k(float dt, float T, int Ntraj, curandState* state, float* su
 }
 
 int main(void) {
+	float sigma[10] = { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f, 0.19f, 0.2f };
+	float theta[10] = { -0.34f, -0.3f, -0.27f, -0.24f, -0.21f, -0.18f, -0.15f, -0.12f, -0.09f, -0.06f };
+	float kappa[10] = { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f, 0.19f, 0.2f };
+	float Str[4] = { 100.0f, 95.0f, 90.0f, 85.0f };
 
-	float Y0[6] = {logf(0.35f), logf(0.27f), logf(0.2f), logf(0.16f), logf(0.12f), logf(0.08f)};
-	float m[6] = {logf(0.3f), logf(0.24f), logf(0.18f), logf(0.13f), logf(0.09f), logf(0.06f)};
-	float alpha[8] = {0.2f, 0.4f, 0.8f, 1.6f, 3.2f, 6.4f, 12.8f, 25.6f};
-		float nu2[6] = {0.5f, 0.7f, 0.9f, 1.1f, 1.3f, 1.5f};
-	float rho[6] = {0.05f, -0.15f, -0.35f, -0.55f, -0.75f, -0.95f};
-	
-	float Tmt[16] = { 1.0f / 12.0f,  2.0f / 12.0f, 3.0f / 12.0f, 4.0f / 12.0f, 5.0f / 12.0f, 6.0f / 12.0f, 7.0f / 12.0f,
-					  8.0f / 12.0f, 9.0f / 12.0f, 10.0f / 12.0f, 11.0f / 12.0f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
+	float Tmt[4] = { 3.0f / 12.0f, 6.0f / 12.0f, 1.0f, 2.0f };
 
-	//float Tmt[5] = { 3.0f / 12.0f, 6.0f / 12.0f, 1.0f, 1.5f, 2.0f };
-
-
-	float Str[16];
-	//float Str[6];
-
-	cudaMemcpyToSymbol(Y0d, Y0, 6*sizeof(float));
-	cudaMemcpyToSymbol(md, m, 6*sizeof(float));
-	cudaMemcpyToSymbol(alphad, alpha, 8*sizeof(float));
-	cudaMemcpyToSymbol(nu2d, nu2, 6*sizeof(float));
-	cudaMemcpyToSymbol(rhod, rho, 6*sizeof(float));
+	cudaMemcpyToSymbol(sigmad, sigma, 10 * sizeof(float));
+	cudaMemcpyToSymbol(thetad, theta, 10 * sizeof(float));
+	cudaMemcpyToSymbol(kappad, kappa, 10 * sizeof(float));
+	cudaMemcpyToSymbol(Strd, Str, 4 * sizeof(float));
 
 	int pidx, same;
-	int NTPB = 256 * 2; //256; // 256 * 2;
-	int NB =  81 * 4; // 81*3; // 81 * 4;
-	int Ntraj = 32 * 512; // 256 * 512; // 32 * 512;
-	float dt = sqrtf(1.0f/(1000.0f));
-	float StrR, mR, alphaR, betaR, rhoR, price, error;
+	int NTPB = 32;
+	int NB =  125;
+	int Ntraj = 40000; 
+	float dt = 1.0f / (64.0f * 24.0f);
+	float StrR, kappaR, sigmaR, error, price;
 
 	curandState* states;
 	cudaMalloc(&states, NB*NTPB*sizeof(curandState));
@@ -178,12 +128,7 @@ int main(void) {
 	FILE* fpt;
 
 	char strg[30];
-	for(int i=0; i<16; i++){
-//	for (int i = 0; i < 5; i++) {
-		strikeInterval(Str, Tmt[i]);
-		//strikeIntervalInfer(Str, Tmt[i]);
-		cudaMemcpyToSymbol(Strd, Str, 16*sizeof(float));
-		//cudaMemcpyToSymbol(Strd, Str, 6 * sizeof(float));
+	for(int i=0; i<4; i++){
 		MC_k<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum, num);
 		cudaDeviceSynchronize();
 		for(int j=0; j<16; j++){
