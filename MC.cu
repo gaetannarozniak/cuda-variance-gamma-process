@@ -101,7 +101,8 @@ __global__ void MC_VG(
     float T,       
     int   Ntraj,
     curandState* state, 
-    float* sums
+    float* sums,
+    float* sums2
 )
 {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -119,7 +120,8 @@ __global__ void MC_VG(
     float scale = kappa;
 	int Nsteps = (int)(T / dt);
 
-    float payoffSum  = 0.0f;  // accumulate payoff
+    float payoffSum  = 0.0f;  
+    float payoffSum2  = 0.0f;  
 
     // Main loop over # of paths assigned to this thread
     for(int i = 0; i < Ntraj; i++)
@@ -148,10 +150,12 @@ __global__ void MC_VG(
         // payoff of a call option:
         float payoff = fmaxf(Y - str, 0.0f);
         payoffSum  += payoff;
+        payoffSum2 += payoff*payoff;
     }
 
     // store partial sums (later you can reduce across threads)
     sums[idx] = payoffSum;    // \sum of payoffs
+    sums2[idx] = payoffSum2;
 
     // save state
     state[idx] = localState;
@@ -173,34 +177,41 @@ int main(void) {
 
 	int NTPB = 32;
 	int NB =  125;
-	int Ntraj = 4000; 
+	int Ntraj = 1000; 
 	float dt = 1.0f / (64.0f * 24.0f);
-	float strR, kappaR, sigmaR, thetaR, expected_payoff;
+	float strR, kappaR, sigmaR, thetaR, expected_payoff, stdd, error;
 
 	curandState* states;
 	cudaMalloc(&states, NB*NTPB*sizeof(curandState));
 	init_curand_state_k <<<NB, NTPB>>> (states);
 	float *sum;
+	float *sum2;
 	cudaMallocManaged(&sum, NB*NTPB*sizeof(float));
+	cudaMallocManaged(&sum2, NB*NTPB*sizeof(float));
 	FILE* fpt;
 
 	char strg[30];
+
+
+    sprintf(strg, "training.csv");
+    fpt = fopen(strg, "w+");
+    fprintf(fpt, "sigma, theta, kappa, Str, T, expected_payoff, error, Ntraj\n");
+
 	for(int i=0; i<4; i++){
-		MC_VG<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum);
+		MC_VG<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum, sum2);
 		cudaDeviceSynchronize();
-		sprintf(strg, "Tmt%.4f.csv", Tmt[i]);
-		fpt = fopen(strg, "w+");
-		fprintf(fpt, "sigma, theta, kappa, Str, expected_payoff, Ntraj\n");
 		for(int k=0; k< 10 * 10 * 10 * 4; k++){
 			expected_payoff = sum[k] / Ntraj;
+            stdd = sqrt(sum2[k] / Ntraj - expected_payoff * expected_payoff); 
+            error = 1.96 * stdd / sqrt(Ntraj);
 			strR = str[k % 4];
 			kappaR = kappa[(k / 4) % 10];
 			thetaR = theta[(k / 40) % 10];
 			sigmaR = sigma[(k / 400) % 10];
-			fprintf(fpt, "%f, %f, %f, %f, %f, %d\n", sigmaR, thetaR, kappaR, strR, expected_payoff, Ntraj);
+			fprintf(fpt, "%f, %f, %f, %f, %f, %f, %f, %d\n", sigmaR, thetaR, kappaR, strR, Tmt[i], expected_payoff, error, Ntraj);
 		}
-		fclose(fpt);
 	}
+    fclose(fpt);
 	cudaFree(states);
 	cudaFree(sum);
 	return 0;
