@@ -195,7 +195,7 @@ int main(void) {
 
     sprintf(strg, "training.csv");
     fpt = fopen(strg, "w+");
-    fprintf(fpt, "sigma, theta, kappa, Str, T, expected_payoff, error, Ntraj\n");
+    fprintf(fpt, "sigma,theta,kappa,strike,T,expected_payoff,error,Ntraj\n");
 
 	for(int i=0; i<4; i++){
 		MC_VG<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum, sum2);

@@ -3,3 +3,4 @@ nested_vg.cu
 *.csv
 MC
 *.out
+__pycache__
