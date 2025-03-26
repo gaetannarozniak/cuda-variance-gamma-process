@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <curand_kernel.h>
+#include <iostream>
+using namespace std;
 
 __device__ float sigmad[10];
 __device__ float thetad[10];
@@ -44,7 +46,7 @@ __device__ float gammaRand(float a, float b, curandState *state)
                 // This yields a Gamma(a,1) sample = (X/(X+Y)) * E
                 float G = (X / (X + Y)) * E;  
                 // Finally convert to Gamma(a, b) => scale by 1/b
-                return G * (1.0f / b);
+                return G; 
             }
         }
     }
@@ -80,13 +82,13 @@ __device__ float gammaRand(float a, float b, curandState *state)
                 if (Z <= (1.0f - twoY2overX))
                 {
                     // This is a direct accept => X is Gamma(a,1)
-                    return X * (1.0f / b);
+                    return X;
                 }
                 // 2) otherwise, do the log check:
                 if (__logf(Z) <= 2.0f * (a_minus1 * __logf(X / a_minus1) - Y))
                 {
                     // accepted => X is Gamma(a,1)
-                    return X * (1.0f / b);
+                    return X;
                 }
             }
             // else reject and repeat
@@ -136,7 +138,7 @@ __global__ void MC_VG(
 
             // 3) Variance Gamma increment:
             float dX = sigma * N * __fsqrt_rn(kappa * dS)
-                       + theta * dS;
+                       + theta * kappa * dS;
             X += dX;
         }
 
@@ -145,7 +147,6 @@ __global__ void MC_VG(
 
         // payoff of a call option:
         float payoff = fmaxf(Y - str, 0.0f);
-
         payoffSum  += payoff;
     }
 
@@ -161,7 +162,7 @@ int main(void) {
 	float sigma[10] = { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f, 0.19f, 0.2f };
 	float theta[10] = { -0.34f, -0.3f, -0.27f, -0.24f, -0.21f, -0.18f, -0.15f, -0.12f, -0.09f, -0.06f };
 	float kappa[10] = { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f, 0.19f, 0.2f };
-	float str[4] = { 100.0f, 95.0f, 90.0f, 85.0f };
+	float str[4] = { 1.0f, 0.95f, 0.9f, 0.85f };
 
 	float Tmt[4] = { 3.0f / 12.0f, 6.0f / 12.0f, 1.0f, 2.0f };
 
@@ -172,7 +173,7 @@ int main(void) {
 
 	int NTPB = 32;
 	int NB =  125;
-	int Ntraj = 40000; 
+	int Ntraj = 4000; 
 	float dt = 1.0f / (64.0f * 24.0f);
 	float strR, kappaR, sigmaR, thetaR, expected_payoff;
 
