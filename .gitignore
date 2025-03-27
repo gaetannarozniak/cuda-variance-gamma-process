@@ -4,3 +4,4 @@ nested_vg.cu
 MC
 *.out
 __pycache__
+env_cuda/

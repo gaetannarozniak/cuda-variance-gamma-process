@@ -1,103 +1,74 @@
 #include <stdio.h>
 #include <curand_kernel.h>
 #include <iostream>
+#include <math.h>
 using namespace std;
 
-__device__ float sigmad[10];
-__device__ float thetad[10];
-__device__ float kappad[10];
-__device__ float strd[4];
+#define NS 8 
+#define NP 20 
 
+__device__ float sigmad[NP];
+__device__ float thetad[NP];
+__device__ float kappad[NP];
+__device__ float strd[NS];
 
-// Set the state for each thread
 __global__ void init_curand_state_k(curandState* state)
 {
-	int idx = blockDim.x * blockIdx.x + threadIdx.x;
-	curand_init(0, idx, 0, &state[idx]);
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    curand_init(0, idx, 0, &state[idx]);
 }
-
 
 __device__ float gammaRand(float a, float b, curandState *state)
 {
-    // Handle invalid shape gracefully:
     if (a <= 0.0f) {
-        // Could return 0, or assert, etc. 
-        // We'll just return 0 here to avoid NaNs.
         return 0.0f;
     }
-
     if (a < 1.0f)
     {
-        // We will produce Gamma(a, 1) and then scale by 1/b to get Gamma(a, b).
-        // Johnk’s accept–reject:
         while(true)
         {
             float U = curand_uniform(state);
             float V = curand_uniform(state);
-
-            // X ~ U^(1/a),  Y ~ V^(1/(1-a))
             float X = powf(U, 1.0f / a);
             float Y = powf(V, 1.0f / (1.0f - a));
-
             if (X + Y <= 1.0f)
             {
-                // Once accepted, generate an exponential(1) deviate E = -ln(U2)
                 float E = -__logf(curand_uniform(state));
-                // This yields a Gamma(a,1) sample = (X/(X+Y)) * E
-                float G = (X / (X + Y)) * E;  
-                // Finally convert to Gamma(a, b) => scale by 1/b
-                return G; 
+                float G = (X / (X + Y)) * E;
+                return G;
             }
         }
     }
     else
     {
-        // Also known as the “Cheng–Best” or “BC” method
-        // We'll generate Gamma(a,1) and then multiply by 1/b => Gamma(a,b).
-
         float a_minus1 = a - 1.0f;
-        float c_       = 3.0f * a - 0.75f;  
-
+        float c_       = 3.0f * a - 0.75f;
         while(true)
         {
             float U = curand_uniform(state);
             float V = curand_uniform(state);
-
-            // W = U(1-U).  Because 0 < U < 1, W in (0, 0.25].
             float W = U * (1.0f - U);
-            // Y ~ +/- sqrt( c_/W ) * (U - 0.5). 
-            // This is the “stretch” transform.
             float Y = __fsqrt_rn(c_ / W) * (U - 0.5f);
-            // X ~ (a-1) + Y
             float X = a_minus1 + Y;
-
-            // Accept only if X >= 0.
             if (X >= 0.0f)
             {
-                // Z = 64 W^3 V^3
                 float Z = 64.0f * W * W * W * V * V * V;
-                // Now do the acceptance checks:
-                // 1) quick reject if Z > (1 - 2Y^2 / X)
-                float twoY2overX = 2.0f * Y * Y / X; 
+                float twoY2overX = 2.0f * Y * Y / X;
                 if (Z <= (1.0f - twoY2overX))
                 {
-                    // This is a direct accept => X is Gamma(a,1)
                     return X;
                 }
-                // 2) otherwise, do the log check:
                 if (__logf(Z) <= 2.0f * (a_minus1 * __logf(X / a_minus1) - Y))
                 {
-                    // accepted => X is Gamma(a,1)
                     return X;
                 }
             }
-            // else reject and repeat
         }
     }
 }
 
 __global__ void MC_VG(
-	float dt,
+    float dt,
     float T,       
     int   Ntraj,
     curandState* state, 
@@ -108,111 +79,114 @@ __global__ void MC_VG(
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     curandState localState = state[idx];
 
-	// unpack parameters
-	float str = strd[idx % 4];
-	float kappa = kappad[(idx / 4) % 10];
-	float theta = thetad[(idx / 40) % 10];
-	float sigma = sigmad[(idx / 400) % 10];
+    float str    = strd[idx % NS];
+    float kappa  = kappad[(idx / NS) % NP];
+    float theta  = thetad[(idx / (NS * NP)) % NP];
+    float sigma  = sigmad[(idx / (NS * NP * NP)) % NP];
 
-	float wVG = __logf(1.0f - theta * kappa - kappa * sigma * sigma / 2.0f) / kappa;
-
+    float wVG = __logf(1.0f - theta * kappa - kappa * sigma * sigma / 2.0f) / kappa;
     float shape = dt / kappa;
     float scale = kappa;
-	int Nsteps = (int)(T / dt);
+    int Nsteps = (int)(T / dt);
 
-    float payoffSum  = 0.0f;  
-    float payoffSum2  = 0.0f;  
+    float payoffSum  = 0.0f;
+    float payoffSum2 = 0.0f;
 
-    // Main loop over # of paths assigned to this thread
     for(int i = 0; i < Ntraj; i++)
     {
-        // We will accumulate X_t from 0..T, then exponentiate
         float X = 0.0f;
-
-        // Simulate the partial sums for X(t) from t=0..T
         for(int n = 0; n < Nsteps; n++)
         {
-            // 1) Sample Gamma increment:
             float dS = gammaRand(shape, scale, &localState);
-
-            // 2) Sample Normal(0,1):
             float N  = curand_normal(&localState);
-
-            // 3) Variance Gamma increment:
-            float dX = sigma * N * __fsqrt_rn(kappa * dS)
-                       + theta * kappa * dS;
+            float dX = sigma * N * __fsqrt_rn(kappa * dS) + theta * kappa * dS;
             X += dX;
         }
-
-        // final asset price at T:  Y_T = exp( wVG*T + X )
         float Y = __expf(wVG * T + X);
-
-        // payoff of a call option:
         float payoff = fmaxf(Y - str, 0.0f);
         payoffSum  += payoff;
-        payoffSum2 += payoff*payoff;
+        payoffSum2 += payoff * payoff;
     }
 
-    // store partial sums (later you can reduce across threads)
-    sums[idx] = payoffSum;    // \sum of payoffs
+    sums[idx] = payoffSum;
     sums2[idx] = payoffSum2;
-
-    // save state
     state[idx] = localState;
 }
 
-
 int main(void) {
-	float sigma[10] = { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f, 0.19f, 0.2f };
-	float theta[10] = { -0.34f, -0.3f, -0.27f, -0.24f, -0.21f, -0.18f, -0.15f, -0.12f, -0.09f, -0.06f };
-	float kappa[10] = { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f, 0.19f, 0.2f };
-	float str[4] = { 1.0f, 0.95f, 0.9f, 0.85f };
+    float sigma[NP] = {
+        0.100f, 0.105f, 0.110f, 0.115f, 0.120f,
+        0.125f, 0.130f, 0.135f, 0.140f, 0.145f,
+        0.150f, 0.155f, 0.160f, 0.165f, 0.170f,
+        0.175f, 0.180f, 0.185f, 0.190f, 0.195f
+    };
+    float theta[NP] = {
+        -0.300f, -0.295f, -0.290f, -0.285f, -0.280f,
+        -0.275f, -0.270f, -0.265f, -0.260f, -0.255f,
+        -0.250f, -0.245f, -0.240f, -0.235f, -0.230f,
+        -0.225f, -0.220f, -0.215f, -0.210f, -0.205f
+    };
+    float kappa[NP] = {
+        0.100f, 0.105f, 0.110f, 0.115f, 0.120f,
+        0.125f, 0.130f, 0.135f, 0.140f, 0.145f,
+        0.150f, 0.155f, 0.160f, 0.165f, 0.170f,
+        0.175f, 0.180f, 0.185f, 0.190f, 0.195f
+    };
 
-	float Tmt[4] = { 3.0f / 12.0f, 6.0f / 12.0f, 1.0f, 2.0f };
+    float str[NS] = {1.15f, 1.10f, 1.05f, 1.00f, 0.95f, 0.90f, 0.85f, 0.80f};
 
-	cudaMemcpyToSymbol(sigmad, sigma, 10 * sizeof(float));
-	cudaMemcpyToSymbol(thetad, theta, 10 * sizeof(float));
-	cudaMemcpyToSymbol(kappad, kappa, 10 * sizeof(float));
-	cudaMemcpyToSymbol(strd, str, 4 * sizeof(float));
+    cudaMemcpyToSymbol(sigmad, sigma, NP * sizeof(float));
+    cudaMemcpyToSymbol(thetad, theta, NP * sizeof(float));
+    cudaMemcpyToSymbol(kappad, kappa, NP * sizeof(float));
+    cudaMemcpyToSymbol(strd, str, NS * sizeof(float));
 
-	int NTPB = 32;
-	int NB =  125;
-	int Ntraj = 1000; 
-	float dt = 1.0f / (64.0f * 24.0f);
-	float strR, kappaR, sigmaR, thetaR, expected_payoff, stdd, error;
+    float Tmt[6] = {
+        3.0f / 12.0f, 6.0f / 12.0f, 9.0f / 12.0f, 1.0f,
+        1.5f, 2.0f
+    };
+    
+    int NTPB = 512;
+    int NB = 64000 / NTPB;  
+    int Ntraj = 40000;
+    float dt = 1.0f / (64.0f * 24.0f);
 
-	curandState* states;
-	cudaMalloc(&states, NB*NTPB*sizeof(curandState));
-	init_curand_state_k <<<NB, NTPB>>> (states);
-	float *sum;
-	float *sum2;
-	cudaMallocManaged(&sum, NB*NTPB*sizeof(float));
-	cudaMallocManaged(&sum2, NB*NTPB*sizeof(float));
-	FILE* fpt;
+    float strR, kappaR, sigmaR, thetaR, expected_payoff, stdd, error;
+    
+    curandState* states;
+    cudaMalloc(&states, NB * NTPB * sizeof(curandState));
+    init_curand_state_k<<<NB, NTPB>>>(states);
+    
+    float *sum;
+    float *sum2;
+    cudaMallocManaged(&sum, NB * NTPB * sizeof(float));
+    cudaMallocManaged(&sum2, NB * NTPB * sizeof(float));
 
-	char strg[30];
-
-
-    sprintf(strg, "training.csv");
-    fpt = fopen(strg, "w+");
+    FILE* fpt;
+    char filename[30];
+    sprintf(filename, "training.csv");
+    fpt = fopen(filename, "w+");
     fprintf(fpt, "sigma,theta,kappa,strike,T,expected_payoff,error,Ntraj\n");
 
-	for(int i=0; i<4; i++){
-		MC_VG<<<NB,NTPB>>>(dt, Tmt[i], Ntraj, states, sum, sum2);
-		cudaDeviceSynchronize();
-		for(int k=0; k< 10 * 10 * 10 * 4; k++){
-			expected_payoff = sum[k] / Ntraj;
-            stdd = sqrt(sum2[k] / Ntraj - expected_payoff * expected_payoff); 
+    int numT = 6;
+    int totalComb = NS * NP * NP * NP;
+
+    for(int i = 0; i < numT; i++){
+        MC_VG<<<NB, NTPB>>>(dt, Tmt[i], Ntraj, states, sum, sum2);
+        cudaDeviceSynchronize();
+        for(int k = 0; k < totalComb; k++){
+            expected_payoff = sum[k] / Ntraj;
+            stdd = sqrt(sum2[k] / Ntraj - expected_payoff * expected_payoff);
             error = 1.96 * stdd / sqrt(Ntraj);
-			strR = str[k % 4];
-			kappaR = kappa[(k / 4) % 10];
-			thetaR = theta[(k / 40) % 10];
-			sigmaR = sigma[(k / 400) % 10];
-			fprintf(fpt, "%f, %f, %f, %f, %f, %f, %f, %d\n", sigmaR, thetaR, kappaR, strR, Tmt[i], expected_payoff, error, Ntraj);
-		}
-	}
+            strR    = str[k % NS];
+            kappaR  = kappa[(k / NS) % NP];
+            thetaR  = theta[(k / (NS * NP)) % NP];
+            sigmaR  = sigma[(k / (NS * NP * NP)) % NP];
+            fprintf(fpt, "%f, %f, %f, %f, %f, %f, %f, %d\n", sigmaR, thetaR, kappaR, strR, Tmt[i], expected_payoff, error, Ntraj);
+        }
+    }
     fclose(fpt);
-	cudaFree(states);
-	cudaFree(sum);
-	return 0;
+    cudaFree(states);
+    cudaFree(sum);
+    cudaFree(sum2);
+    return 0;
 }
