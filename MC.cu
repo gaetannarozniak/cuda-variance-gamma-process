@@ -140,14 +140,14 @@ int main(void) {
     cudaMemcpyToSymbol(kappad, kappa, NP * sizeof(float));
     cudaMemcpyToSymbol(strd, str, NS * sizeof(float));
 
-    float Tmt[6] = {
+    float Tmt[5] = {
         3.0f / 12.0f, 6.0f / 12.0f, 9.0f / 12.0f, 1.0f,
-        1.5f, 2.0f
+        1.5f
     };
     
     int NTPB = 512;
     int NB = 64000 / NTPB;  
-    int Ntraj = 40000;
+    int Ntraj = 10000;
     float dt = 1.0f / (64.0f * 24.0f);
 
     float strR, kappaR, sigmaR, thetaR, expected_payoff, stdd, error;
@@ -167,7 +167,7 @@ int main(void) {
     fpt = fopen(filename, "w+");
     fprintf(fpt, "sigma,theta,kappa,strike,T,expected_payoff,error,Ntraj\n");
 
-    int numT = 6;
+    int numT = 5;
     int totalComb = NS * NP * NP * NP;
 
     for(int i = 0; i < numT; i++){
