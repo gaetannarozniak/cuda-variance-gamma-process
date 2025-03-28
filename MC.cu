@@ -4,26 +4,28 @@
 #include <math.h>
 using namespace std;
 
-#define NS 8 
-#define NP 20 
+#define NP 20 // nuber of sigma, theta and kappa values
+#define NS 8 // number of strike values
 
 __device__ float sigmad[NP];
 __device__ float thetad[NP];
 __device__ float kappad[NP];
 __device__ float strd[NS];
 
+// initialize the cuda random state for each thread
 __global__ void init_curand_state_k(curandState* state)
 {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     curand_init(0, idx, 0, &state[idx]);
 }
 
-__device__ float gammaRand(float a, float b, curandState *state)
+// simulate a Gamma(a) variable using Johnk or Best generator (depending on the value of a)
+__device__ float gammaRand(float a, curandState *state)
 {
     if (a <= 0.0f) {
         return 0.0f;
     }
-    if (a < 1.0f)
+    if (a < 1.0f) // Johnk's generator
     {
         while(true)
         {
@@ -39,7 +41,7 @@ __device__ float gammaRand(float a, float b, curandState *state)
             }
         }
     }
-    else
+    else // Best's generator
     {
         float a_minus1 = a - 1.0f;
         float c_       = 3.0f * a - 0.75f;
@@ -67,15 +69,8 @@ __device__ float gammaRand(float a, float b, curandState *state)
     }
 }
 
-__global__ void MC_VG(
-    float dt,
-    float T,       
-    int   Ntraj,
-    curandState* state, 
-    float* sums,
-    float* sums2
-)
-{
+// kernel that computes an MC estimate of the price of a call option 
+__global__ void MC_VG(float dt, float T, int Ntraj, curandState* state, float* sums, float* sums2) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     curandState localState = state[idx];
 
@@ -86,7 +81,6 @@ __global__ void MC_VG(
 
     float wVG = __logf(1.0f - theta * kappa - kappa * sigma * sigma / 2.0f) / kappa;
     float shape = dt / kappa;
-    float scale = kappa;
     int Nsteps = (int)(T / dt);
 
     float payoffSum  = 0.0f;
@@ -97,7 +91,7 @@ __global__ void MC_VG(
         float X = 0.0f;
         for(int n = 0; n < Nsteps; n++)
         {
-            float dS = gammaRand(shape, scale, &localState);
+            float dS = gammaRand(shape, &localState);
             float N  = curand_normal(&localState);
             float dX = sigma * N * __fsqrt_rn(kappa * dS) + theta * kappa * dS;
             X += dX;
@@ -114,6 +108,8 @@ __global__ void MC_VG(
 }
 
 int main(void) {
+
+    // set the values for the grid of parameters
     float sigma[NP] = {
         0.100f, 0.105f, 0.110f, 0.115f, 0.120f,
         0.125f, 0.130f, 0.135f, 0.140f, 0.145f,
@@ -132,14 +128,16 @@ int main(void) {
         0.150f, 0.155f, 0.160f, 0.165f, 0.170f,
         0.175f, 0.180f, 0.185f, 0.190f, 0.195f
     };
-
+    // strike values
     float str[NS] = {1.15f, 1.10f, 1.05f, 1.00f, 0.95f, 0.90f, 0.85f, 0.80f};
 
+    // copy the parameter values to device
     cudaMemcpyToSymbol(sigmad, sigma, NP * sizeof(float));
     cudaMemcpyToSymbol(thetad, theta, NP * sizeof(float));
     cudaMemcpyToSymbol(kappad, kappa, NP * sizeof(float));
     cudaMemcpyToSymbol(strd, str, NS * sizeof(float));
 
+    // maturity values (stay on the host)
     float Tmt[5] = {
         3.0f / 12.0f, 6.0f / 12.0f, 9.0f / 12.0f, 1.0f,
         1.5f
@@ -171,6 +169,7 @@ int main(void) {
     int totalComb = NS * NP * NP * NP;
 
     for(int i = 0; i < numT; i++){
+        // call the MC_VG kernel that computes the MC estimates of the prices
         MC_VG<<<NB, NTPB>>>(dt, Tmt[i], Ntraj, states, sum, sum2);
         cudaDeviceSynchronize();
         for(int k = 0; k < totalComb; k++){
